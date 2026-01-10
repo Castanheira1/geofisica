@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PROSPECTOR-AI v4.1 | Painel de Controle</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); }
+        .tier-T1 { color: #ef4444; border-left: 4px solid #ef4444; }
+        .tier-T2 { color: #f97316; border-left: 4px solid #f97316; }
+        .tier-T3 { color: #eab308; border-left: 4px solid #eab308; }
+        .tier-T4 { color: #22c55e; border-left: 4px solid #22c55e; }
+        .tier-T5 { color: #94a3b8; border-left: 4px solid #94a3b8; }
+        #map { height: 400px; border-radius: 12px; }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+    <header class="flex justify-between items-center mb-8">
+        <div>
+            <h1 class="text-3xl font-bold text-blue-400">PROSPECTOR-AI <span class="text-sm font-normal text-slate-400">v4.1</span></h1>
+            <p class="text-slate-400">Sistema Autônomo de Exploração Mineral Geofísica</p>
+        </div>
+        <div class="flex gap-4">
+            <div class="glass p-3 rounded-lg text-center">
+                <span class="block text-xs text-slate-400 uppercase">Status do Sistema</span>
+                <span class="text-green-400 font-bold"><i class="fas fa-circle text-[10px] mr-1"></i> ONLINE</span>
+            </div>
+            <div class="glass p-3 rounded-lg text-center">
+                <span class="block text-xs text-slate-400 uppercase">Conexão Supabase</span>
+                <span id="db-status" class="text-blue-400 font-bold">VERIFICANDO...</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div class="lg:col-span-2 space-y-6">
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div class="glass p-4 rounded-xl">
+                    <span class="text-slate-400 text-sm">Total de Leituras</span>
+                    <div id="total-readings" class="text-2xl font-bold">0</div>
+                </div>
+                <div class="glass p-4 rounded-xl">
+                    <span class="text-slate-400 text-sm">Alvos Críticos (T1)</span>
+                    <div id="critical-targets" class="text-2xl font-bold text-red-500">0</div>
+                </div>
+                <div class="glass p-4 rounded-xl">
+                    <span class="text-slate-400 text-sm">Synapse Médio</span>
+                    <div id="avg-synapse" class="text-2xl font-bold text-blue-400">0%</div>
+                </div>
+                <div class="glass p-4 rounded-xl">
+                    <span class="text-slate-400 text-sm">Área Coberta</span>
+                    <div id="area-covered" class="text-2xl font-bold text-green-400">0 ha</div>
+                </div>
+            </div>
+
+            <div class="glass p-6 rounded-xl">
+                <h3 class="text-lg font-semibold mb-4">Mapa de Prospecção</h3>
+                <div id="map"></div>
+            </div>
+
+            <div class="glass p-6 rounded-xl">
+                <h3 class="text-lg font-semibold mb-4">Últimas Detecções de Alta Confiança</h3>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead>
+                            <tr class="text-slate-400 border-b border-slate-700">
+                                <th class="pb-2">ID</th>
+                                <th class="pb-2">Localização</th>
+                                <th class="pb-2">Synapse</th>
+                                <th class="pb-2">Tier</th>
+                                <th class="pb-2">Ação Recomendada</th>
+                            </tr>
+                        </thead>
+                        <tbody id="results-table"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="space-y-6">
+            <div class="glass p-6 rounded-xl">
+                <h3 class="text-lg font-semibold mb-4"><i class="fas fa-robot mr-2 text-blue-400"></i> Parecer da IA Geológica</h3>
+                <div id="ai-insight" class="space-y-4">
+                    <p class="text-slate-400 italic">Aguardando novos dados para interpretação...</p>
+                </div>
+            </div>
+
+            <div class="glass p-6 rounded-xl">
+                <h3 class="text-lg font-semibold mb-4"><i class="fas fa-fire mr-2 text-orange-500"></i> Hotspots Persistentes</h3>
+                <div id="hotspots-list" class="space-y-3"></div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        let map;
+        let markers = [];
+
+        function initMap() {
+            map = L.map('map').setView([-6.0652, -50.1836], 12);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+        }
+
+        async function updateDashboard() {
+            try {
+                const response = await fetch('/api/v1/results?limit=50', {
+                    headers: { 'Authorization': 'Bearer dev-key-12345' }
+                });
+                const data = await response.json();
+                
+                if (data.length > 0) {
+                    document.getElementById('db-status').innerText = 'CONECTADO';
+                    document.getElementById('total-readings').innerText = data.length;
+                    
+                    const table = document.getElementById('results-table');
+                    table.innerHTML = data.slice(0, 10).map(r => `
+                        <tr class="border-b border-slate-800 hover:bg-slate-800/50 transition-colors">
+                            <td class="py-3 text-xs text-slate-500">${r.id}</td>
+                            <td class="py-3">${r.latitude.toFixed(4)}, ${r.longitude.toFixed(4)}</td>
+                            <td class="py-3 font-bold text-blue-400">${r.synapse_ajustado.toFixed(1)}%</td>
+                            <td class="py-3"><span class="px-2 py-1 rounded text-xs font-bold bg-slate-900 tier-${r.tier_code}">${r.risk_tier}</span></td>
+                            <td class="py-3 text-sm">${r.acao}</td>
+                        </tr>
+                    `).join('');
+
+                    // Atualiza Mapa
+                    markers.forEach(m => map.removeLayer(m));
+                    markers = data.map(r => {
+                        const color = r.risk_tier === 'CRITICAL' ? '#ef4444' : r.risk_tier === 'HIGH' ? '#f97316' : '#3b82f6';
+                        return L.circleMarker([r.latitude, r.longitude], { radius: 8, color: color, fillOpacity: 0.8 }).addTo(map);
+                    });
+                }
+            } catch (e) { console.error(e); }
+        }
+
+        initMap();
+        setInterval(updateDashboard, 5000);
+        updateDashboard();
+    </script>
+</body>
+</html>

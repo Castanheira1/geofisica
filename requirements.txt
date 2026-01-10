@@ -1,0 +1,11 @@
+fastapi==0.109.0
+uvicorn==0.27.0
+httpx==0.26.0
+pydantic==2.5.3
+python-multipart==0.0.6
+pandas==2.1.4
+numpy==1.26.3
+scipy==1.12.0
+scikit-learn==1.4.0
+anthropic==0.18.0
+pyproj==3.6.1
