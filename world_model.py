@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict
 import numpy as np
+
+logger = logging.getLogger("prospector.world")
 
 from geological_layers import obter_contexto_geologico, ContextoGeologico, TipoLitologia
 from metalogenic_context import analisar_metalogenia, AnaliseMetalogenica, TipoDeposito
@@ -188,8 +191,8 @@ class WorldModel:
                     dias=ctx.espacial.dias_observados
                 )
                 ctx.interpretacao_ia = await interpretar_ponto(ia_ctx)
-            except Exception as e:
-                print(f"Erro na IA: {e}")
+            except Exception:
+                logger.exception("Erro na interpretação por IA")
         
         # 8. Decisão Final
         ctx.decisao = self._decidir(ctx)

@@ -4,7 +4,9 @@ __pycache__/
 .venv/
 venv/
 .env
-*.png
-*.geojson
-*.txt
-!requirements.txt
+.pytest_cache/
+
+# Artefatos gerados pelos scripts de análise (geo_neural_synapse_v3)
+mapa_*.png
+alvos.geojson
+relatorio_*.txt
