@@ -38,6 +38,16 @@ class InterpretacaoGeologica:
     proximos_passos: str
 
 async def interpretar_ponto(ctx: ContextoPonto) -> InterpretacaoGeologica:
+    """Gera um PARECER TEXTUAL (narrativa) a partir do contexto do ponto.
+
+    [AVISO — ver RELATORIO_TECNICO.md] A saída do LLM é interpretação em linguagem
+    natural para apoio à leitura humana; NÃO é uma medição nem uma fonte de evidência
+    quantitativa, e o campo `confianca` aqui é qualitativo. A favorabilidade e a
+    incerteza quantitativas vêm do WorldModel (dado + física), não do LLM.
+
+    Nota de stack: este módulo usa a API OpenAI; `requirements.txt`/README mencionam
+    `anthropic`. Padronizar o provedor é um item de limpeza pendente.
+    """
     prompt = f"""
     Você é um Geólogo Sênior Especialista em Exploração Mineral (IOCG, Ouro Orogênico).
     Analise os dados deste ponto de prospecção em Carajás:

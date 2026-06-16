@@ -14,7 +14,7 @@ import httpx
 from world_model import processar_ponto, WorldContext
 from spatial_memory import memoria
 
-app = FastAPI(title="PROSPECTOR-AI", version="4.1")
+app = FastAPI(title="PROSPECTOR-AI", version="4.2")
 
 # Configurações via Variáveis de Ambiente (Segurança)
 API_KEY = os.environ.get('API_KEY', 'dev-key-12345')
@@ -47,6 +47,8 @@ class ResultadoProcessado(BaseModel):
     longitude: float
     proprio_mag_nt: float
     filtrado_mag_nt: float
+    anomalia_nt: Optional[float] = None
+    anomalia_confiavel: bool = False
     cprm_litologia: Optional[str]
     cprm_cu_ppm: Optional[float]
     cprm_au_ppb: Optional[float]
@@ -54,13 +56,15 @@ class ResultadoProcessado(BaseModel):
     tipo_deposito: Optional[str]
     score_metalogenico: float
     anomalia_persistente: bool
-    synapse_index: float
+    synapse_index: float            # favorabilidade RELATIVA (0-100), não probabilidade
     synapse_ajustado: float
     risk_tier: str
     tier_code: str
+    completude_dados: float = 0.0   # fração da evidência esperada presente (0-1)
+    incerteza: float = 1.0          # 0-1 (1 = máxima)
     acao: Optional[str]
     justificativa: Optional[str]
-    confianca: float
+    confianca: float                # honesta: derivada da incerteza, não fixada
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     if credentials.credentials != API_KEY:
@@ -124,6 +128,8 @@ async def processar_leitura(leitura: LeituraSensor, background_tasks: Background
             longitude=leitura.longitude,
             proprio_mag_nt=leitura.mag_nt,
             filtrado_mag_nt=resumo.get('filtrado_mag_nt', leitura.mag_nt),
+            anomalia_nt=resumo.get('anomalia_nt'),
+            anomalia_confiavel=resumo.get('anomalia_confiavel', False),
             cprm_litologia=resumo.get('cprm_litologia'),
             cprm_cu_ppm=resumo.get('cprm_cu_ppm'),
             cprm_au_ppb=resumo.get('cprm_au_ppb'),
@@ -135,6 +141,8 @@ async def processar_leitura(leitura: LeituraSensor, background_tasks: Background
             synapse_ajustado=ctx.synapse_ajustado,
             risk_tier=ctx.risk_tier,
             tier_code=ctx.tier_code,
+            completude_dados=resumo.get('completude_dados', 0.0),
+            incerteza=resumo.get('incerteza', 1.0),
             acao=resumo.get('acao'),
             justificativa=ctx.decisao.justificativa if ctx.decisao else None,
             confianca=resumo.get('confianca', 0)

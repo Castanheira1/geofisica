@@ -2,11 +2,19 @@
 
 import httpx
 import asyncio
+import logging
+import re
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, Set
 from enum import IntEnum
 import math
 
+logger = logging.getLogger("prospector.geosgb")
+
+# Endpoints do GeoSGB. ATENÇÃO: os nomes de camada (typeName) abaixo NÃO foram
+# verificados contra o serviço real (ver RELATORIO_TECNICO.md §5). Por isso o
+# cliente DESCOBRE as camadas em runtime via GetCapabilities e só recorre aos
+# palpites como último recurso — emitindo aviso explícito em vez de falhar calado.
 GEOSGB_WFS = "https://geosgb.cprm.gov.br/geosgb/gs/ows"
 GEOSGB_WCS = "https://geosgb.cprm.gov.br/geosgb/gs/wcs"
 
@@ -130,20 +138,61 @@ def classificar_litologia(texto: str) -> TipoLitologia:
     return TipoLitologia.DESCONHECIDO
 
 class GeoSGBClient:
+    # Cache de camadas disponíveis por processo. None = ainda não consultado;
+    # set() vazio = GetCapabilities inacessível (não tenta mais nesta sessão).
+    _typenames_cache: Optional[Set[str]] = None
+
     def __init__(self, timeout: float = 30.0):
         self.timeout = timeout
         self.client: Optional[httpx.AsyncClient] = None
-        
+
     async def __aenter__(self):
         self.client = httpx.AsyncClient(timeout=self.timeout)
         return self
-        
+
     async def __aexit__(self, *args):
         if self.client:
             await self.client.aclose()
-    
+
     def _bbox(self, lat: float, lon: float, buffer: float) -> str:
         return f"{lon-buffer},{lat-buffer},{lon+buffer},{lat+buffer}"
+
+    async def _typenames_disponiveis(self) -> Set[str]:
+        """Lê os FeatureTypes reais do serviço via GetCapabilities (cache por processo).
+        Evita depender de nomes de camada chutados. Retorna set vazio se inacessível."""
+        if GeoSGBClient._typenames_cache is not None:
+            return GeoSGBClient._typenames_cache
+
+        nomes: Set[str] = set()
+        params = {"service": "WFS", "version": "2.0.0", "request": "GetCapabilities"}
+        try:
+            resp = await self.client.get(GEOSGB_WFS, params=params)
+            if resp.status_code == 200:
+                # Captura <Name>...</Name> dos FeatureType (com ou sem namespace prefix).
+                nomes = set(re.findall(r"<(?:\w+:)?Name>\s*([^<\s][^<]*?)\s*</(?:\w+:)?Name>", resp.text))
+            else:
+                logger.warning("GeoSGB GetCapabilities HTTP %s", resp.status_code)
+        except Exception as e:
+            logger.warning("GeoSGB GetCapabilities inacessível: %s", e)
+
+        GeoSGBClient._typenames_cache = nomes
+        if not nomes:
+            logger.warning("GeoSGB: nenhuma camada descoberta; usando palpites de typeName (podem retornar vazio).")
+        return nomes
+
+    async def _resolver_typenames(self, candidatos: List[str], palavras: List[str]) -> List[str]:
+        """Resolve a lista de typeNames a consultar: prioriza camadas REAIS do serviço
+        cujo nome contém as palavras-chave; cai nos palpites apenas se a descoberta
+        falhar. Assim erros de nome viram aviso, não silêncio."""
+        disponiveis = await self._typenames_disponiveis()
+        if not disponiveis:
+            return candidatos  # descoberta indisponível -> tenta palpites
+
+        reais = [n for n in disponiveis if any(p in n.lower() for p in palavras)]
+        if not reais:
+            logger.warning("GeoSGB: nenhuma camada casa com %s. Disponíveis (amostra): %s",
+                           palavras, sorted(disponiveis)[:15])
+        return reais or candidatos
     
     async def _wfs_query(self, typename: str, bbox: str) -> List[dict]:
         params = {
@@ -166,11 +215,16 @@ class GeoSGBClient:
     
     async def buscar_litologia(self, lat: float, lon: float) -> Litologia:
         bbox = self._bbox(lat, lon, 0.005)
-        features = await self._wfs_query("geosgb:unidades_litoestratigraficas", bbox)
-        
-        if not features:
-            features = await self._wfs_query("geosgb:geologia", bbox)
-        
+        typenames = await self._resolver_typenames(
+            ["geosgb:unidades_litoestratigraficas", "geosgb:geologia"],
+            ["litoestrat", "litolog", "geolog", "unidade"],
+        )
+        features = []
+        for tn in typenames:
+            features = await self._wfs_query(tn, bbox)
+            if features:
+                break
+
         if not features:
             return Litologia()
         
@@ -190,8 +244,12 @@ class GeoSGBClient:
         bbox = self._bbox(lat, lon, buffer)
         
         estruturas = []
-        
-        for typename in ["geosgb:estruturas_geologicas", "geosgb:lineamentos", "geosgb:falhas"]:
+
+        typenames = await self._resolver_typenames(
+            ["geosgb:estruturas_geologicas", "geosgb:lineamentos", "geosgb:falhas"],
+            ["estrutur", "lineament", "falha", "cisalh"],
+        )
+        for typename in typenames:
             features = await self._wfs_query(typename, bbox)
             
             for f in features:
@@ -233,8 +291,12 @@ class GeoSGBClient:
         bbox = self._bbox(lat, lon, buffer)
         
         depositos = []
-        
-        for typename in ["geosgb:depositos_minerais", "geosgb:ocorrencias_minerais", "geosgb:recursos_minerais"]:
+
+        typenames = await self._resolver_typenames(
+            ["geosgb:depositos_minerais", "geosgb:ocorrencias_minerais", "geosgb:recursos_minerais"],
+            ["deposit", "ocorrenc", "recurso", "mineral"],
+        )
+        for typename in typenames:
             features = await self._wfs_query(typename, bbox)
             
             for f in features:
@@ -264,9 +326,13 @@ class GeoSGBClient:
         buffer = raio_km / 111.0
         bbox = self._bbox(lat, lon, buffer)
         
-        for typename in ["geosgb:geoquimica_sedimento_corrente", "geosgb:geoquimica_solo", "geosgb:geoquimica"]:
+        typenames = await self._resolver_typenames(
+            ["geosgb:geoquimica_sedimento_corrente", "geosgb:geoquimica_solo", "geosgb:geoquimica"],
+            ["geoquim", "sedimento", "solo"],
+        )
+        for typename in typenames:
             features = await self._wfs_query(typename, bbox)
-            
+
             if features:
                 closest = None
                 min_dist = float('inf')
