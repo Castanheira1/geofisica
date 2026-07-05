@@ -785,12 +785,28 @@ class ClassificadorNeural:
     
     def criar_modelo_sintetico(self, config: ConfiguracaoModelo):
         """
-        Cria um modelo treinado com dados sintéticos baseados em
-        depósitos conhecidos de Carajás (Salobo, Sossego, etc.)
+        [AVISO DE VALIDADE CIENTÍFICA — ver RELATORIO_TECNICO.md §2.5]
+
+        Treina o classificador em rótulos SINTÉTICOS auto-gerados. Isto é
+        cientificamente INVÁLIDO como preditor: as distribuições positivas/negativas
+        abaixo são inventadas a partir das MESMAS premissas do scoring, então a rede
+        só pode reaprender a heurística (label leakage / shortcut learning). Qualquer
+        "acurácia" obtida assim é um artefato circular, NÃO mede prospectividade real.
+
+        Uso legítimo: APENAS demonstração/teste de fumaça do pipeline. NÃO usar a saída
+        como evidência. Um modelo defensável exige rótulos de depósitos/ocorrências
+        REAIS conhecidos (ex.: recursos minerais do GeoSGB) + PU learning + validação
+        cruzada ESPACIAL (Fase 3 do plano de correção).
         """
+        import warnings
+        warnings.warn(
+            "criar_modelo_sintetico: treino em rótulos sintéticos é circular "
+            "(label leakage) e NÃO é preditivo. Apenas para teste. Ver RELATORIO_TECNICO.md §2.5.",
+            stacklevel=2,
+        )
         if not SKLEARN_AVAILABLE:
             return
-        
+
         np.random.seed(42)
         n_positivos = 200
         n_negativos = 800

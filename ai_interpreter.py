@@ -2,12 +2,25 @@
 
 import os
 import json
+import logging
 from dataclasses import dataclass
 from typing import Optional
-from openai import OpenAI
 
-# Cliente OpenAI compatível pré-configurado no ambiente
-client = OpenAI()
+logger = logging.getLogger("prospector.ia")
+
+# Inicialização preguiçosa: importar este módulo NÃO deve falhar nem exigir chave.
+# O cliente só é criado quando há OPENAI_API_KEY e a IA é efetivamente usada.
+_client = None
+
+
+def _get_client():
+    global _client
+    if _client is None:
+        if not os.environ.get("OPENAI_API_KEY", "").strip():
+            return None
+        from openai import OpenAI
+        _client = OpenAI()
+    return _client
 
 @dataclass
 class ContextoPonto:
@@ -38,6 +51,16 @@ class InterpretacaoGeologica:
     proximos_passos: str
 
 async def interpretar_ponto(ctx: ContextoPonto) -> InterpretacaoGeologica:
+    """Gera um PARECER TEXTUAL (narrativa) a partir do contexto do ponto.
+
+    [AVISO — ver RELATORIO_TECNICO.md] A saída do LLM é interpretação em linguagem
+    natural para apoio à leitura humana; NÃO é uma medição nem uma fonte de evidência
+    quantitativa, e o campo `confianca` aqui é qualitativo. A favorabilidade e a
+    incerteza quantitativas vêm do WorldModel (dado + física), não do LLM.
+
+    Nota de stack: este módulo usa a API OpenAI; `requirements.txt`/README mencionam
+    `anthropic`. Padronizar o provedor é um item de limpeza pendente.
+    """
     prompt = f"""
     Você é um Geólogo Sênior Especialista em Exploração Mineral (IOCG, Ouro Orogênico).
     Analise os dados deste ponto de prospecção em Carajás:
@@ -59,6 +82,16 @@ async def interpretar_ponto(ctx: ContextoPonto) -> InterpretacaoGeologica:
     - proximos_passos: Investigação prática a seguir.
     """
     
+    client = _get_client()
+    if client is None:
+        return InterpretacaoGeologica(
+            interpretacao="Interpretação por IA desativada (sem OPENAI_API_KEY).",
+            recomendacao="Usar a favorabilidade e a incerteza quantitativas do WorldModel.",
+            confianca="N/A",
+            modelo_provavel=ctx.tipo_deposito_provavel,
+            proximos_passos="Configurar OPENAI_API_KEY para habilitar o parecer textual.",
+        )
+
     try:
         response = client.chat.completions.create(
             model="gpt-4.1-mini",
@@ -78,8 +111,8 @@ async def interpretar_ponto(ctx: ContextoPonto) -> InterpretacaoGeologica:
             modelo_provavel=data.get('modelo_provavel', ctx.tipo_deposito_provavel),
             proximos_passos=data.get('proximos_passos', 'Investigação adicional')
         )
-    except Exception as e:
-        print(f"Erro na interpretação da IA: {e}")
+    except Exception:
+        logger.exception("Erro na interpretação da IA")
         return InterpretacaoGeologica(
             interpretacao="Erro no processamento da IA",
             recomendacao="Verificar logs",
