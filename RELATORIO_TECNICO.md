@@ -189,14 +189,49 @@ https://www.tandfonline.com/doi/full/10.1080/08123985.2024.2378132
 
 ## 5. Portais de dados e padrões de interoperabilidade
 
-**Status:** a frente de pesquisa dedicada aos portais nacionais e aos **nomes reais das camadas
-do GeoSGB/CPRM** foi interrompida por limite de sessão antes de produzir resultado verificado, e
-o egress de rede deste ambiente bloqueia `geosgb.sgb.gov.br` / `geosgb.cprm.gov.br` — portanto
-**os `typeName` reais do GeoSGB permanecem NÃO verificados**.
+**Status: RESOLVIDO em 2026-08-26.** A hipótese anterior (egress bloqueado) estava **errada**:
+o problema era o endereço. A CPRM passou a se chamar **SGB** e o host `geosgb.cprm.gov.br`
+derruba a conexão (connection reset). O endpoint OGC vivo é:
 
-**Consequência para o código:** em vez de **chutar** nomes de camada (o que faz hoje, retornando
-vazio em silêncio), o cliente deve **descobrir as camadas em runtime via `GetCapabilities`** e
-**falhar de forma explícita** quando não encontrar — ver correção em `geological_layers.py`.
+    https://opendata.sgb.gov.br/geoserver/ows
+
+GetCapabilities responde em ~3 s com **344 FeatureTypes**. Camadas verificadas e agora fixadas
+em `geological_layers.py`:
+
+| Constante | `typeName` real | Conteúdo |
+|---|---|---|
+| `LAYER_OCORRENCIAS` | `p3m:vw_cprm_ocorr_min` | ocorrências minerais (RECMIN) |
+| `LAYER_LITOESTRATIGRAFIA` | `geonode:mgbrasil_litoestratigrafia_escala_1_2500000` | unidades litoestratigráficas |
+| `LAYER_ESTRUTURAS` | `geonode:mgbrasil_estruturas_terrestres_escala_1_2500000` | falhas, zonas de cisalhamento, diques |
+| `LAYER_ESTRUTURAS_GEOFISICAS` | `geonode:mgbrasil_estruturas_terrestres_geofisicas_escala_1_2500000` | lineamentos interpretados de geofísica |
+| `LAYER_GEOQUIMICA` | `p3m:vw_cprm_geoq_b_d` | geoquímica de sedimento de corrente, multi-elementar |
+
+**5.1 — Três armadilhas do WFS 2.0 causavam vazio silencioso (HTTP 200 + zero feature).**
+Medido na mesma camada e mesma bbox sobre Carajás: a forma antiga devolvia **0 features**, a
+correta devolve **345**. As causas:
+
+1. `typeName` (singular) é sintaxe WFS 1.x; o WFS 2.0 exige **`typeNames`**.
+2. `bbox` sem CRS explícito é lido em EPSG:4326, cuja ordem de eixos é **(lat, lon)** — invertida
+   em relação ao (lon, lat) passado. A consulta caía fora da área. Corrigido fixando
+   `urn:ogc:def:crs:OGC:1.3:CRS84` no próprio bbox.
+3. O GeoServer devolve `ExceptionReport` em **XML com HTTP 200**; o `except: pass` do código
+   anterior engolia o erro. Agora toda falha vira motivo textual em `ContextoGeologico.diagnostico`.
+
+Além disso, **nenhum nome de campo do código anterior existia** nas camadas reais
+(`nome_unidade` → `nome_unida`, `substancia` → `substancias`, `eon_era` → `eon_idad_m`, etc.),
+de modo que mesmo uma conexão bem-sucedida produziria registros vazios.
+
+**5.2 — Limitação de escala (não repetir over-claim).** Litoestratigrafia e estruturas estão em
+**1:2.500.000** (1 cm = 25 km). Isso é **contexto regional, não litologia de prospecto**: a bbox
+de 0,005° (~550 m) da versão anterior estava muito abaixo da resolução do mapa. Cada resultado
+agora carrega `escala_nominal` para que o consumidor não trate o dado como detalhe.
+
+**5.3 — Qualidade do dado geoquímico: há valores fisicamente impossíveis.** Medidos na camada:
+`fe_pct = 2310` (2310% de ferro), `as_ppm = 5000`, `co_ppm = 3000` — provável erro de escala/
+unidade ou limite de detecção gravado como número. `geological_layers.TETOS_PLAUSIVEIS` descarta
+o que excede o teto físico do elemento (e valores negativos, convenção de "menor que"),
+registrando cada descarte em `Geoquimica.descartados`. **Isto mitiga, não resolve**: a causa-raiz
+segue por investigar antes de confiar quantitativamente nesta camada.
 
 **Padrões a adotar:** GeoSciML e EarthResourceML (vocabulários CGI) para geologia/recursos
 minerais; OGC **WFS/WCS/WMS** para serviços; OneGeology como agregador. Portais a integrar
@@ -226,9 +261,14 @@ Geological Survey.
    é ambígua) — depende de fontes de dado.
 
 **Fase 3 — ML defensável (requer ground truth):**
-8. Montar conjunto de **depósitos/ocorrências reais conhecidos** (GeoSGB recursos minerais) como
-   positivos; **PU learning**; **CV espacial**; saída = mapa de favorabilidade + incerteza;
-   validação por success-rate/P–A. Aposentar a "rede neural sintética".
+8. Montar conjunto de **depósitos/ocorrências reais conhecidos** como positivos; **PU learning**;
+   **CV espacial**; saída = mapa de favorabilidade + incerteza; validação por success-rate/P–A.
+   Aposentar a "rede neural sintética".
+   **Fonte de ground truth confirmada (2026-08-26):** `p3m:vw_cprm_ocorr_min`. Numa caixa sobre
+   Carajás retornou **345 ocorrências — 173 classificadas como "Depósito"**, 78 com cobre,
+   incluindo Salobo, Sossego, Cristalino, Alemão, Igarapé Bahia, Pojuca, Km-118, S11 e N1–N8,
+   com coordenada. O campo `importancia` separa Depósito / Indício / Ocorrência (hierarquia de
+   rótulo) e `substancias` dá a commodity, permitindo positivos por tipo de alvo.
 
 ---
 
@@ -238,7 +278,8 @@ Geological Survey.
   automatizada; itens assim estão marcados **[resumo]** e foram corroborados por múltiplas fontes.
 - Nenhum paper aplicando **RTP especificamente a Carajás** foi recuperado; o vínculo da latitude
   é fisicamente sólido mas não fixado a uma citação única.
-- **Nomes de camadas do GeoSGB NÃO verificados** (limite de sessão + egress bloqueado).
+- ~~Nomes de camadas do GeoSGB NÃO verificados~~ — **resolvido em 2026-08-26**, ver §5.
+  A causa não era egress, era o host renomeado (CPRM → SGB).
 - O argumento "rótulo sintético = circular" (§2.5) é dedução sólida a partir da literatura de
   *label leakage* + qualidade de rótulo em MPM, não uma frase única citada literalmente.
 </content>
