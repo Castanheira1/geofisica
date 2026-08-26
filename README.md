@@ -78,5 +78,8 @@ Documentadas em `RELATORIO_TECNICO.md` §6:
 - **Fase 2:** adotar Harmonica/Verde/SimPEG; integrar gravimetria + EM/MT.
 - **Fase 3:** ML defensável com depósitos **reais** (GeoSGB) como rótulos, PU learning
   e validação cruzada espacial — aposentando o classificador sintético atual.
-- Nomes reais das camadas do GeoSGB ainda **não verificados**; o cliente os descobre em
-  runtime via GetCapabilities.
+- ~~Nomes reais das camadas do GeoSGB não verificados~~ — **resolvido**: endpoint e camadas
+  verificados contra o serviço real (`RELATORIO_TECNICO.md` §5). O host antigo da CPRM está
+  morto; o vivo é `opendata.sgb.gov.br/geoserver/ows`.
+- A geoquímica pública do SGB contém valores fisicamente impossíveis; o cliente descarta o
+  implausível e registra o descarte, mas a causa-raiz segue por investigar (§5.3).
